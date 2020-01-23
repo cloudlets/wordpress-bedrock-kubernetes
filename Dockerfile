@@ -7,27 +7,43 @@ COPY composer.lock .
 
 RUN composer install
 
-FROM php:7.2-fpm
+FROM php:7.3-apache
+ENV APACHE_DOCUMENT_ROOT=/var/www/html/web
 
-RUN apt-get update && apt-get install -y \
-    libpng-dev \
-    libjpeg-dev \
-    libicu-dev \
-    libxml2-dev \
-    libssl-dev \
-    libcurl4-openssl-dev \
-    libxslt1-dev \
-    libfreetype6-dev \
-    nginx && \
-    docker-php-ext-configure gd --with-jpeg-dir=/usr/local/share/ --with-freetype-dir=/usr/include/ && \
-    docker-php-ext-install -j$(nproc) bcmath mysqli gd curl intl mbstring pdo pdo_mysql soap xsl zip opcache
+# install the PHP extensions we need
+RUN set -ex; \
+	\
+	apt-get update; \
+	apt-get install -y \
+		libjpeg-dev \
+		libpng-dev \
+	; \
+	\
+	docker-php-ext-configure gd --with-png-dir=/usr --with-jpeg-dir=/usr; \
+	docker-php-ext-install gd mysqli opcache
 
-RUN usermod -u 1000 www-data
+# TODO consider removing the *-dev deps and only keeping the necessary lib* packages
 
-COPY ./default.conf /etc/nginx/sites-available/default
-RUN sed -i 's/php-fpm/127.0.0.1/g' /etc/nginx/sites-available/default
+# set recommended PHP.ini settings
+# see https://secure.php.net/manual/en/opcache.installation.php
+RUN { \
+		echo 'opcache.memory_consumption=128'; \
+		echo 'opcache.interned_strings_buffer=8'; \
+		echo 'opcache.max_accelerated_files=4000'; \
+		echo 'opcache.revalidate_freq=2'; \
+		echo 'opcache.fast_shutdown=1'; \
+		echo 'opcache.enable_cli=1'; \
+	} > /usr/local/etc/php/conf.d/opcache-recommended.ini
+
+RUN a2enmod rewrite expires
+
+VOLUME /var/www/html
 
 COPY --from=builder /build /var/www/html
 COPY . /var/www/html
+COPY apache/000-default.conf /etc/apache2/sites-available/
+COPY ./start.sh /
+RUN chmod a+x /start.sh
+
 ENTRYPOINT ["/start.sh"] 
-CMD ["/bin/bash", "-c", "nginx -g 'daemon off;' & /usr/local/sbin/php-fpm"]
+CMD ["/bin/bash", "-c", "apache2-foreground"]
